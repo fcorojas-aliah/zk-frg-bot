@@ -65,17 +65,18 @@ Responde SOLO con JSON válido, sin texto adicional, sin markdown, en este forma
 }
 """
 
-def classify_statement(image_bytes: bytes, media_type: str) -> dict:
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
+def classify_statement(file_bytes: bytes, media_type: str) -> dict:
+    b64 = base64.b64encode(file_bytes).decode("utf-8")
+    if media_type == "application/pdf":
+        content_block = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
+    else:
+        content_block = {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}}
     msg = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=4000,
         messages=[{
             "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                {"type": "text", "text": CLASSIFY_PROMPT},
-            ],
+            "content": [content_block, {"type": "text", "text": CLASSIFY_PROMPT}],
         }],
     )
     text = "".join(b.text for b in msg.content if b.type == "text")
@@ -88,25 +89,56 @@ def append_to_sheet(tarjeta: str, cargos: list, source_note: str):
     ws_frg = sheet.worksheet("FRG Personal")
     today = datetime.now().strftime("%d/%m/%Y")
 
-    n_zk, n_frg = 0, 0
+    # Precarga montos ya existentes (columna D) para chequeo de duplicados
+    def _existing_montos(ws):
+        try:
+            vals = ws.col_values(4)[1:]  # salta encabezado
+            out = set()
+            for v in vals:
+                try:
+                    out.add(round(float(str(v).replace(",", "")), 2))
+                except ValueError:
+                    continue
+            return out
+        except Exception:
+            return set()
+
+    existing_zk = _existing_montos(ws_zk)
+    existing_frg = _existing_montos(ws_frg)
+
+    n_zk, n_frg, n_dup = 0, 0, 0
     for c in cargos:
+        try:
+            monto = round(float(c.get("monto", 0)), 2)
+        except (TypeError, ValueError):
+            monto = 0
+
+        is_zk = c.get("clasificacion") == "ZK Operativo"
+        existing_set = existing_zk if is_zk else existing_frg
+
+        if monto in existing_set:
+            n_dup += 1
+            continue  # ya existe un cargo con este monto exacto — se omite
+
         row = [
             c.get("fecha") or today,
             tarjeta,
             c.get("concepto", ""),
-            c.get("monto", 0),
+            monto,
             c.get("seccion", ""),
             "",  # subcategoría libre, ajustar a mano si hace falta
             c.get("notas", ""),
             source_note,
         ]
-        if c.get("clasificacion") == "ZK Operativo":
+        if is_zk:
             ws_zk.append_row(row, value_input_option="USER_ENTERED")
             n_zk += 1
         else:
             ws_frg.append_row(row, value_input_option="USER_ENTERED")
             n_frg += 1
-    return n_zk, n_frg
+        existing_set.add(monto)  # evita duplicar dentro del mismo lote
+
+    return n_zk, n_frg, n_dup
 
 
 async def is_authorized(update: Update) -> bool:
@@ -142,12 +174,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No identifiqué cargos en la imagen. ¿Está completa y legible?")
             return
 
-        n_zk, n_frg = append_to_sheet(tarjeta, cargos, f"Telegram foto {datetime.now().strftime('%d/%m %H:%M')}")
+        n_zk, n_frg, n_dup = append_to_sheet(tarjeta, cargos, f"Telegram foto {datetime.now().strftime('%d/%m %H:%M')}")
 
         total = sum(c.get("monto", 0) for c in cargos)
+        dup_line = f"\n{n_dup} omitido(s) por ser duplicado (mismo monto ya registrado)" if n_dup else ""
         await update.message.reply_text(
             f"Listo — {tarjeta}\n"
-            f"{len(cargos)} cargos clasificados: {n_zk} ZK Operativo, {n_frg} FRG Personal\n"
+            f"{len(cargos)} cargos detectados: {n_zk} ZK Operativo, {n_frg} FRG Personal{dup_line}\n"
             f"Total detectado: ${total:,.2f} MXN\n\n"
             f"Revisa el detalle: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
         )
@@ -162,8 +195,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     doc = update.message.document
-    if doc.mime_type not in ("image/jpeg", "image/png"):
-        await update.message.reply_text("Por ahora solo leo imágenes (JPG/PNG). Manda una captura del estado de cuenta.")
+    if doc.mime_type not in ("image/jpeg", "image/png", "application/pdf"):
+        await update.message.reply_text("Por ahora solo leo imágenes (JPG/PNG) o PDF. Manda una captura o el PDF del estado de cuenta.")
         return
 
     await update.message.reply_text("Recibido. Leyendo y clasificando...")
@@ -178,11 +211,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No identifiqué cargos en el archivo.")
             return
 
-        n_zk, n_frg = append_to_sheet(tarjeta, cargos, f"Telegram doc {datetime.now().strftime('%d/%m %H:%M')}")
+        n_zk, n_frg, n_dup = append_to_sheet(tarjeta, cargos, f"Telegram doc {datetime.now().strftime('%d/%m %H:%M')}")
         total = sum(c.get("monto", 0) for c in cargos)
+        dup_line = f"\n{n_dup} omitido(s) por ser duplicado (mismo monto ya registrado)" if n_dup else ""
         await update.message.reply_text(
             f"Listo — {tarjeta}\n"
-            f"{len(cargos)} cargos clasificados: {n_zk} ZK Operativo, {n_frg} FRG Personal\n"
+            f"{len(cargos)} cargos detectados: {n_zk} ZK Operativo, {n_frg} FRG Personal{dup_line}\n"
             f"Total detectado: ${total:,.2f} MXN\n\n"
             f"Revisa el detalle: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
         )
@@ -195,7 +229,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.Document.IMAGE, handle_document))
+    app.add_handler(MessageHandler(filters.Document.IMAGE | filters.Document.PDF, handle_document))
     log.info("Bot arrancando (polling)...")
     app.run_polling()
 
