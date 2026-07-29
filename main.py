@@ -119,7 +119,7 @@ def append_to_sheet(cargos: list, source_note: str):
     existing_zk = _existing_montos(ws_zk)
     existing_frg = _existing_montos(ws_frg)
 
-    n_zk, n_frg, n_dup = 0, 0, 0
+    zk_rows, frg_rows, n_dup = [], [], 0
     for c in cargos:
         try:
             monto = round(float(c.get("monto", 0)), 2)
@@ -143,15 +143,16 @@ def append_to_sheet(cargos: list, source_note: str):
             c.get("notas", ""),
             source_note,
         ]
-        if is_zk:
-            ws_zk.append_row(row, value_input_option="USER_ENTERED")
-            n_zk += 1
-        else:
-            ws_frg.append_row(row, value_input_option="USER_ENTERED")
-            n_frg += 1
+        (zk_rows if is_zk else frg_rows).append(row)
         existing_set.add(monto)  # evita duplicar dentro del mismo lote
 
-    return n_zk, n_frg, n_dup
+    # Un solo request por hoja (en vez de uno por fila) — evita el límite de escrituras de Google
+    if zk_rows:
+        ws_zk.append_rows(zk_rows, value_input_option="USER_ENTERED")
+    if frg_rows:
+        ws_frg.append_rows(frg_rows, value_input_option="USER_ENTERED")
+
+    return len(zk_rows), len(frg_rows), n_dup
 
 
 async def is_authorized(update: Update) -> bool:
@@ -244,11 +245,58 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Error al procesar: {e}")
 
 
+ANSWER_PROMPT = """Eres el asistente financiero personal de Francisco Rojas García (FRG).
+Te voy a dar el contenido completo de dos hojas: "ZK Operativo" (gastos de su empresa ZK Inmobiliaria) y "FRG Personal" (sus gastos personales).
+Cada fila tiene columnas: Fecha, Cuenta/Tarjeta, Concepto, Monto MXN, Sección, Subcategoría, Notas, Fuente.
+
+Responde la pregunta de Francisco basándote ÚNICAMENTE en estos datos. Sé breve, directo, en español, con números concretos cuando aplique (suma lo que haga falta). Si la información no está en los datos, dilo claramente en vez de inventar.
+"""
+
+def answer_question(question: str) -> str:
+    ws_zk = sheet.worksheet("ZK Operativo")
+    ws_frg = sheet.worksheet("FRG Personal")
+    zk_data = ws_zk.get_all_values()
+    frg_data = ws_frg.get_all_values()
+
+    def _fmt(rows, label):
+        lines = [label]
+        for r in rows:
+            lines.append(" | ".join(r))
+        return "\n".join(lines)
+
+    context = _fmt(zk_data, "=== ZK OPERATIVO ===") + "\n\n" + _fmt(frg_data, "=== FRG PERSONAL ===")
+
+    msg = anthropic_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1500,
+        messages=[{
+            "role": "user",
+            "content": f"{ANSWER_PROMPT}\n\n{context}\n\nPregunta de Francisco: {question}",
+        }],
+    )
+    return "".join(b.text for b in msg.content if b.type == "text").strip()
+
+
+async def handle_text_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_authorized(update):
+        await update.message.reply_text("No autorizado.")
+        return
+    question = update.message.text
+    await update.message.reply_text("Revisando tus datos...")
+    try:
+        answer = answer_question(question)
+        await update.message.reply_text(answer)
+    except Exception as e:
+        log.exception("Error respondiendo pregunta")
+        await update.message.reply_text(f"Error al responder: {e}")
+
+
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.IMAGE | filters.Document.PDF, handle_document))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_question))
     log.info("Bot arrancando (polling)...")
     app.run_polling()
 
