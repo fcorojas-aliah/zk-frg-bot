@@ -29,7 +29,7 @@ SHEET_ID = os.environ["SHEET_ID"]  # 1sJJhnz9tNqNkTuDG5g9QIaqybC39Ew6MF_7Z2MEb4O
 # Déjalo vacío ("") mientras pruebas; luego lo llenas para que nadie más lo use.
 ALLOWED_USER_IDS = [x for x in os.environ.get("ALLOWED_USER_IDS", "").split(",") if x]
 
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY, timeout=90.0, max_retries=2)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds_dict = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
