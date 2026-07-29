@@ -65,23 +65,35 @@ Responde SOLO con JSON válido, sin texto adicional, sin markdown, en este forma
 }
 """
 
-def classify_statement(file_bytes: bytes, media_type: str) -> dict:
+def classify_statement(file_bytes: bytes, media_type: str, user_note: str = "") -> dict:
     b64 = base64.b64encode(file_bytes).decode("utf-8")
     if media_type == "application/pdf":
         content_block = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
     else:
         content_block = {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}}
+
+    prompt = CLASSIFY_PROMPT
+    if user_note:
+        prompt += f"\n\nNota de Francisco sobre este envío (tómala en cuenta): {user_note}"
+
     msg = anthropic_client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4000,
+        max_tokens=8000,
         messages=[{
             "role": "user",
-            "content": [content_block, {"type": "text", "text": CLASSIFY_PROMPT}],
+            "content": [content_block, {"type": "text", "text": prompt}],
         }],
     )
     text = "".join(b.text for b in msg.content if b.type == "text")
     text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Estado de cuenta con demasiados movimientos: la respuesta se cortó a medias.
+        raise ValueError(
+            "El documento tiene demasiados movimientos para procesarlo de una vez. "
+            "Manda menos páginas o un rango de fechas más corto (ej. solo un mes)."
+        )
 
 
 def append_to_sheet(tarjeta: str, cargos: list, source_note: str):
@@ -166,7 +178,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await context.bot.get_file(photo.file_id)
         image_bytes = await file.download_as_bytearray()
 
-        result = classify_statement(bytes(image_bytes), "image/jpeg")
+        result = classify_statement(bytes(image_bytes), "image/jpeg", user_note=update.message.caption or "")
         tarjeta = result.get("tarjeta", "Sin identificar")
         cargos = result.get("cargos", [])
 
@@ -184,6 +196,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Total detectado: ${total:,.2f} MXN\n\n"
             f"Revisa el detalle: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
         )
+    except ValueError as e:
+        await update.message.reply_text(str(e))
     except Exception as e:
         log.exception("Error procesando estado de cuenta")
         await update.message.reply_text(f"Error al procesar: {e}")
@@ -203,7 +217,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         file = await context.bot.get_file(doc.file_id)
         image_bytes = await file.download_as_bytearray()
-        result = classify_statement(bytes(image_bytes), doc.mime_type)
+        result = classify_statement(bytes(image_bytes), doc.mime_type, user_note=update.message.caption or "")
         tarjeta = result.get("tarjeta", "Sin identificar")
         cargos = result.get("cargos", [])
 
@@ -220,6 +234,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Total detectado: ${total:,.2f} MXN\n\n"
             f"Revisa el detalle: https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
         )
+    except ValueError as e:
+        await update.message.reply_text(str(e))
     except Exception as e:
         log.exception("Error procesando documento")
         await update.message.reply_text(f"Error al procesar: {e}")
