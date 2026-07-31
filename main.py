@@ -61,6 +61,156 @@ def ensure_worksheets_exist():
             ws.append_row(headers, value_input_option="USER_ENTERED")
             log.info(f"Hoja creada: {name}")
 
+    if "Dashboard" not in existing:
+        ws = sheet.add_worksheet(title="Dashboard", rows=40, cols=6)
+        ws.update(values=[["DASHBOARD — PRESUPUESTO vs REAL (se actualiza solo)"]], range_name="A1")
+        ws.update(values=[["Editable: solo la columna B (Presupuesto). Todo lo demás se calcula solo."]], range_name="A2")
+
+        rows = [
+            ["Categoría", "Presupuesto Mensual", "Real (Total Histórico)", "Diferencia"],
+            ["GASTOS FIJOS (FRG)", 40025, "=SUMIF('FRG Personal'!E:E,\"Gastos Fijos\",'FRG Personal'!D:D)", "=C4-B4"],
+            ["GASTOS VARIABLES (FRG)", 8230, "=SUMIF('FRG Personal'!E:E,\"Gastos Variables\",'FRG Personal'!D:D)", "=C5-B5"],
+            ["TARJETAS MSI (FRG)", 22949, "=SUMIF('FRG Personal'!E:E,\"Tarjetas (MSI)\",'FRG Personal'!D:D)", "=C6-B6"],
+            ["PRÉSTAMOS PERSONALES (FRG)", 14793, "=SUMIF('FRG Personal'!E:E,\"Préstamos personales\",'FRG Personal'!D:D)", "=C7-B7"],
+            ["OTRO (FRG)", 0, "=SUMIF('FRG Personal'!E:E,\"Otro\",'FRG Personal'!D:D)", "=C8-B8"],
+            ["TOTAL FRG PERSONAL", "=SUM(B4:B8)", "=SUM(C4:C8)", "=C9-B9"],
+            ["", "", "", ""],
+            ["MARKETING (ZK)", 5000, "=SUMIF('ZK Operativo'!E:E,\"Marketing\",'ZK Operativo'!D:D)", "=C11-B11"],
+            ["HERRAMIENTA IA (ZK)", 725, "=SUMIF('ZK Operativo'!E:E,\"Herramienta IA\",'ZK Operativo'!D:D)", "=C12-B12"],
+            ["TECNOLOGÍA (ZK)", 100, "=SUMIF('ZK Operativo'!E:E,\"Tecnología\",'ZK Operativo'!D:D)", "=C13-B13"],
+            ["OPERACIÓN (ZK)", 0, "=SUMIF('ZK Operativo'!E:E,\"Operación\",'ZK Operativo'!D:D)", "=C14-B14"],
+            ["OTRO (ZK)", 0, "=SUMIF('ZK Operativo'!E:E,\"Otro\",'ZK Operativo'!D:D)", "=C15-B15"],
+            ["TOTAL ZK OPERATIVO", "=SUM(B11:B15)", "=SUM(C11:C15)", "=C16-B16"],
+            ["", "", "", ""],
+            ["DEUDA TOTAL ACTIVA (suma saldos)", "", "=SUMIF('Deudas Módulo'!D:D,\">0\")", ""],
+            ["TDC CORPORATIVA — pendiente de confirmar (tu 50%)", "", "=SUMIF('TDC Corporativa FRG'!F:F,\"Pendiente\",'TDC Corporativa FRG'!D:D)", ""],
+        ]
+        ws.update(values=rows, range_name="A3")
+        log.info("Hoja creada: Dashboard (con fórmulas live)")
+
+
+# ================= PPTO MENSUAL (réplica del artefacto, 18 meses, ligada a la data real) =================
+
+MONTHS_18 = ["Ago", "Sep", "Oct", "Nov", "Dic", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic", "Ene"]
+YEARS_18 = [2026, 2026, 2026, 2026, 2026, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2028]
+
+
+def ensure_ppto_mensual():
+    existing = [ws.title for ws in sheet.worksheets()]
+
+    if "Detalle TDC MSI" not in existing:
+        ws = sheet.add_worksheet(title="Detalle TDC MSI", rows=100, cols=6)
+        ws.append_row(["Tarjeta", "Concepto", "Monto Mensual", "Meses Restantes (desde hoy)", "Notas"], value_input_option="USER_ENTERED")
+        log.info("Hoja creada: Detalle TDC MSI (vacía — se llena conforme detectes compras a meses reales)")
+
+    if "PPTO Mensual" in existing:
+        return
+
+    month_labels = [f"{m} {y}" for m, y in zip(MONTHS_18, YEARS_18)]
+    header = ["CONCEPTO"] + month_labels + ["TOTAL PERIODO"]
+
+    rows_def = [
+        ("INGRESOS", None),
+        ("  Aliah (comisiones)", [0] * 18),
+        ("  Rafa", [2000] * 18),
+        ("  Otros ingresos", [12000] * 18),
+        ("TOTAL INGRESOS", "sum"),
+        ("", None),
+        ("GASTOS FIJOS", None),
+        ("  Renta", [9300] * 18),
+        ("  Servicios (Luz/Agua/Gas/Tag)", [3500] * 18),
+        ("  Gasolina Journey", [3200] * 18),
+        ("  Internet/Súper/Telcel/Mascotas", [8180] * 18),
+        ("  Pensión (líquida+colegiaturas+adic.)", [15845] * 18),
+        ("TOTAL GASTOS FIJOS", "sum"),
+        ("", None),
+        ("GASTOS VARIABLES", None),
+        ("  Gasolina Mini", [2700] * 18),
+        ("  Uber Eats", [2000] * 18),
+        ("  Suscripciones/streaming (recortables)", [3530] * 18),
+        ("  Auto (seguro+mtto+tenencia+verif.)", [0] * 18),
+        ("  Salud y medicamentos", [0] * 18),
+        ("  Ropa y calzado", [0] * 18),
+        ("  Otros variables", [0] * 18),
+        ("TOTAL GASTOS VARIABLES", "sum"),
+        ("", None),
+        ("TARJETAS (MSI — se comprime solo desde 'Detalle TDC MSI')", None),
+        ("  BBVA Dorada", "tdc"),
+        ("  Invex Kekis", "tdc"),
+        ("  Banamex Kekis", "tdc"),
+        ("TOTAL TARJETAS", "sum"),
+        ("", None),
+        ("PRÉSTAMOS PERSONALES (desde 'Deudas Módulo')", "prestamos"),
+        ("", None),
+        ("AHORRO (Colchón — meta 9 meses de Fijos+Variables)", [3000] * 18),
+        ("INVERSIONES (Largo plazo, líquido 72h)", [3000] * 18),
+        ("", None),
+        ("BALANCE MENSUAL", "balance"),
+        ("BALANCE ACUMULADO", "acum"),
+    ]
+
+    all_rows = [header]
+    row_num = 2  # fila 1 es el header
+    section_start = {}
+    balance_refs = {}
+
+    def col_letter(c):
+        return chr(64 + c) if c <= 26 else "A" + chr(64 + c - 26)
+
+    for label, kind in rows_def:
+        if kind is None:
+            all_rows.append([label] + [""] * 19)
+            if label.strip():
+                section_start[label] = row_num
+        elif isinstance(kind, list):
+            all_rows.append([label] + kind + [f"=SUM(B{row_num}:S{row_num})"])
+        elif kind == "sum":
+            title_key = [k for k in section_start if section_start[k] < row_num]
+            start_row = section_start[title_key[-1]] + 1
+            end_row = row_num - 1
+            cols = [f"=SUM({col_letter(c)}{start_row}:{col_letter(c)}{end_row})" for c in range(2, 20)]
+            all_rows.append([label] + cols + [f"=SUM(B{row_num}:S{row_num})"])
+            balance_refs[label] = row_num
+        elif kind == "tdc":
+            card = label.strip()
+            cols = []
+            for c in range(2, 20):
+                offset = c - 2
+                cols.append(
+                    f'=SUMPRODUCT((\'Detalle TDC MSI\'!$A$2:$A$200="{card}")*({offset}<\'Detalle TDC MSI\'!$D$2:$D$200)*\'Detalle TDC MSI\'!$C$2:$C$200)'
+                )
+            all_rows.append([label] + cols + [f"=SUM(B{row_num}:S{row_num})"])
+        elif kind == "prestamos":
+            cols = ["=SUM('Deudas Módulo'!$E$2:$E$200)"] * 18
+            all_rows.append([label] + cols + [f"=SUM(B{row_num}:S{row_num})"])
+            balance_refs["PRÉSTAMOS"] = row_num
+        elif kind == "balance":
+            ing_r = balance_refs["TOTAL INGRESOS"]
+            fij_r = balance_refs["TOTAL GASTOS FIJOS"]
+            var_r = balance_refs["TOTAL GASTOS VARIABLES"]
+            tdc_r = balance_refs["TOTAL TARJETAS"]
+            pre_r = balance_refs["PRÉSTAMOS"]
+            ahorro_r = row_num - 3
+            inv_r = row_num - 2
+            cols = [f"={col_letter(c)}{ing_r}-{col_letter(c)}{fij_r}-{col_letter(c)}{var_r}-{col_letter(c)}{tdc_r}-{col_letter(c)}{pre_r}-{col_letter(c)}{ahorro_r}-{col_letter(c)}{inv_r}" for c in range(2, 20)]
+            all_rows.append([label] + cols + [f"=SUM(B{row_num}:S{row_num})"])
+            balance_refs["balance"] = row_num
+        elif kind == "acum":
+            bal_r = balance_refs["balance"]
+            cols = []
+            for c in range(2, 20):
+                if c == 2:
+                    cols.append(f"=B{bal_r}")
+                else:
+                    cols.append(f"={col_letter(c-1)}{row_num}+{col_letter(c)}{bal_r}")
+            all_rows.append([label] + cols + [""])
+        row_num += 1
+
+    ws = sheet.add_worksheet(title="PPTO Mensual", rows=len(all_rows) + 5, cols=20)
+    ws.update(values=all_rows, range_name="A1", value_input_option="USER_ENTERED")
+    ws.freeze(rows=1, cols=1)
+    log.info("Hoja creada: PPTO Mensual (18 meses, formulada, ligada a Detalle TDC MSI y Deudas Módulo)")
+
 
 # ================= CLASIFICACIÓN DE ESTADOS DE CUENTA =================
 
@@ -480,6 +630,7 @@ async def check_6month_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     ensure_worksheets_exist()
+    ensure_ppto_mensual()
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
