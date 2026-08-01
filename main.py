@@ -91,8 +91,22 @@ def ensure_worksheets_exist():
 
 # ================= PPTO MENSUAL (réplica del artefacto, 18 meses, ligada a la data real) =================
 
-MONTHS_18 = ["Ago", "Sep", "Oct", "Nov", "Dic", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic", "Ene"]
+MONTHS_18 = ["ago", "sep", "oct", "nov", "dic", "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic", "ene"]
 YEARS_18 = [2026, 2026, 2026, 2026, 2026, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2027, 2028]
+MONTH_NUM = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6, "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12}
+
+NAVY = {"red": 0.153, "green": 0.137, "blue": 0.302}
+TEAL = {"red": 0.027, "green": 0.545, "blue": 0.678}
+CYAN = {"red": 0.780, "green": 0.965, "blue": 0.980}  # tinte claro para fondos
+GOLD = {"red": 0.788, "green": 0.659, "blue": 0.298}
+GOLD_LIGHT = {"red": 0.976, "green": 0.941, "blue": 0.851}
+TEAL_LIGHT = {"red": 0.878, "green": 0.949, "blue": 0.961}
+WHITE = {"red": 1, "green": 1, "blue": 1}
+GRAY_LIGHT = {"red": 0.933, "green": 0.933, "blue": 0.933}
+
+
+def col_letter(c):
+    return chr(64 + c) if c <= 26 else "A" + chr(64 + c - 26)
 
 
 def ensure_ppto_mensual():
@@ -101,7 +115,7 @@ def ensure_ppto_mensual():
     if "Detalle TDC MSI" not in existing:
         ws = sheet.add_worksheet(title="Detalle TDC MSI", rows=100, cols=6)
         ws.append_row(["Tarjeta", "Concepto", "Monto Mensual", "Meses Restantes (desde hoy)", "Notas"], value_input_option="USER_ENTERED")
-        log.info("Hoja creada: Detalle TDC MSI (vacía — se llena conforme detectes compras a meses reales)")
+        log.info("Hoja creada: Detalle TDC MSI")
 
     if "PPTO Mensual" in existing:
         return
@@ -122,7 +136,7 @@ def ensure_ppto_mensual():
         ("  Gasolina Journey", [3200] * 18),
         ("  Internet/Súper/Telcel/Mascotas", [8180] * 18),
         ("  Pensión (líquida+colegiaturas+adic.)", [15845] * 18),
-        ("TOTAL GASTOS FIJOS", "sum"),
+        ("TOTAL GASTOS FIJOS", "sum_real:Gastos Fijos"),
         ("", None),
         ("GASTOS VARIABLES", None),
         ("  Gasolina Mini", [2700] * 18),
@@ -132,7 +146,7 @@ def ensure_ppto_mensual():
         ("  Salud y medicamentos", [0] * 18),
         ("  Ropa y calzado", [0] * 18),
         ("  Otros variables", [0] * 18),
-        ("TOTAL GASTOS VARIABLES", "sum"),
+        ("TOTAL GASTOS VARIABLES", "sum_real:Gastos Variables"),
         ("", None),
         ("TARJETAS (MSI — se comprime solo desde 'Detalle TDC MSI')", None),
         ("  BBVA Dorada", "tdc"),
@@ -150,24 +164,43 @@ def ensure_ppto_mensual():
     ]
 
     all_rows = [header]
-    row_num = 2  # fila 1 es el header
+    row_num = 2
     section_start = {}
     balance_refs = {}
+    groups = []  # (start_row_1idx, end_row_1idx) para colapsar
+    current_group_start = None
 
-    def col_letter(c):
-        return chr(64 + c) if c <= 26 else "A" + chr(64 + c - 26)
-
-    for label, kind in rows_def:
+    for idx, (label, kind) in enumerate(rows_def):
         if kind is None:
             all_rows.append([label] + [""] * 19)
             if label.strip():
                 section_start[label] = row_num
+                current_group_start = row_num + 1
         elif isinstance(kind, list):
             all_rows.append([label] + kind + [f"=SUM(B{row_num}:S{row_num})"])
+        elif kind.startswith("sum_real:"):
+            seccion = kind.split(":", 1)[1]
+            title_key = [k for k in section_start if section_start[k] < row_num]
+            start_row = section_start[title_key[-1]] + 1
+            end_row = row_num - 1
+            if current_group_start is not None and end_row >= current_group_start:
+                groups.append((current_group_start, end_row))
+            cols = []
+            for c in range(2, 20):
+                m, y = MONTHS_18[c - 2], YEARS_18[c - 2]
+                mn = MONTH_NUM[m]
+                budget_formula = f"SUM({col_letter(c)}{start_row}:{col_letter(c)}{end_row})"
+                real_formula = f"SUMPRODUCT(('FRG Personal'!$E$2:$E$2000=\"{seccion}\")*(MONTH('FRG Personal'!$A$2:$A$2000)={mn})*(YEAR('FRG Personal'!$A$2:$A$2000)={y})*'FRG Personal'!$D$2:$D$2000)"
+                cols.append(f"=IF(TODAY()>=DATE({y},{mn},1),{real_formula},{budget_formula})")
+            all_rows.append([label] + cols + [f"=SUM(B{row_num}:S{row_num})"])
+            balance_refs[label.replace("sum_real:", "")] = row_num
+            balance_refs[title_key[-1]] = row_num  # compat con nombre de sección
         elif kind == "sum":
             title_key = [k for k in section_start if section_start[k] < row_num]
             start_row = section_start[title_key[-1]] + 1
             end_row = row_num - 1
+            if current_group_start is not None and end_row >= current_group_start:
+                groups.append((current_group_start, end_row))
             cols = [f"=SUM({col_letter(c)}{start_row}:{col_letter(c)}{end_row})" for c in range(2, 20)]
             all_rows.append([label] + cols + [f"=SUM(B{row_num}:S{row_num})"])
             balance_refs[label] = row_num
@@ -186,8 +219,8 @@ def ensure_ppto_mensual():
             balance_refs["PRÉSTAMOS"] = row_num
         elif kind == "balance":
             ing_r = balance_refs["TOTAL INGRESOS"]
-            fij_r = balance_refs["TOTAL GASTOS FIJOS"]
-            var_r = balance_refs["TOTAL GASTOS VARIABLES"]
+            fij_r = balance_refs["GASTOS FIJOS"]
+            var_r = balance_refs["GASTOS VARIABLES"]
             tdc_r = balance_refs["TOTAL TARJETAS"]
             pre_r = balance_refs["PRÉSTAMOS"]
             ahorro_r = row_num - 3
@@ -206,10 +239,66 @@ def ensure_ppto_mensual():
             all_rows.append([label] + cols + [""])
         row_num += 1
 
-    ws = sheet.add_worksheet(title="PPTO Mensual", rows=len(all_rows) + 5, cols=20)
+    # Tabla de referencia: saldo/tasa/riesgo por tarjeta (columnas V en adelante, no interfiere con la cuadrícula)
+    tarjetas_ref = [
+        ["TARJETAS — SALDO Y RIESGO (actualiza a mano cuando cambie)", "", "", "", ""],
+        ["Tarjeta", "Saldo Actual", "Tasa Interés Anual", "Pago Mínimo", "Interés estimado si solo pagas mínimo"],
+        ["BBVA Dorada", 50745, 0.45, 4170, "=V3*W3/12"],
+        ["Invex Kekis", 141196, 0.45, 8341, "=V4*W4/12"],
+        ["Banamex Kekis", 215592, 0.615, 10438, "=V5*W5/12"],
+    ]
+
+    ws = sheet.add_worksheet(title="PPTO Mensual", rows=max(len(all_rows) + 5, 10), cols=26)
     ws.update(values=all_rows, range_name="A1", value_input_option="USER_ENTERED")
+    ws.update(values=tarjetas_ref, range_name="V1", value_input_option="USER_ENTERED")
     ws.freeze(rows=1, cols=1)
-    log.info("Hoja creada: PPTO Mensual (18 meses, formulada, ligada a Detalle TDC MSI y Deudas Módulo)")
+
+    try:
+        apply_ppto_formatting(ws, row_num - 1, groups)
+    except Exception as e:
+        log.warning(f"No se pudo aplicar formato/color a PPTO Mensual (los datos y fórmulas sí quedaron bien): {e}")
+    log.info("Hoja creada: PPTO Mensual (18 meses, formulada, colores, grupos colapsables, real vs presupuesto)")
+
+
+def apply_ppto_formatting(ws, last_row, groups):
+    fmt_requests = [
+        {"range": "A1:T1", "format": {"backgroundColor": NAVY, "textFormat": {"foregroundColor": WHITE, "bold": True, "fontSize": 10}, "horizontalAlignment": "CENTER", "wrapStrategy": "WRAP"}},
+        {"range": "V1:Z1", "format": {"backgroundColor": NAVY, "textFormat": {"foregroundColor": WHITE, "bold": True, "fontSize": 9}}},
+        {"range": "V2:Z2", "format": {"backgroundColor": GRAY_LIGHT, "textFormat": {"bold": True, "fontSize": 9}}},
+        {"range": "V3:Z5", "format": {"numberFormat": {"type": "CURRENCY", "pattern": "$#,##0"}}},
+        {"range": "W3:W5", "format": {"numberFormat": {"type": "PERCENT", "pattern": "0.0%"}}},
+        {"range": f"A2:T{last_row}", "format": {"numberFormat": {"type": "CURRENCY", "pattern": "$#,##0"}}},
+    ]
+
+    known_sections = ["INGRESOS", "GASTOS FIJOS", "GASTOS VARIABLES", "TARJETAS", "PRÉSTAMOS PERSONALES"]
+    values = ws.get_all_values()
+    for i, row in enumerate(values, start=1):
+        if not row or not row[0]:
+            continue
+        label = row[0].strip()
+        if any(label.startswith(s) for s in known_sections) and "TOTAL" not in label:
+            fmt_requests.append({"range": f"A{i}:T{i}", "format": {"backgroundColor": GRAY_LIGHT, "textFormat": {"bold": True, "foregroundColor": NAVY}}})
+        elif label.startswith("TOTAL"):
+            fmt_requests.append({"range": f"A{i}:T{i}", "format": {"backgroundColor": TEAL_LIGHT, "textFormat": {"bold": True, "foregroundColor": NAVY}}})
+        elif label == "BALANCE MENSUAL":
+            fmt_requests.append({"range": f"A{i}:T{i}", "format": {"backgroundColor": GOLD_LIGHT, "textFormat": {"bold": True, "foregroundColor": NAVY, "fontSize": 11}}})
+        elif label == "BALANCE ACUMULADO":
+            fmt_requests.append({"range": f"A{i}:T{i}", "format": {"backgroundColor": GOLD, "textFormat": {"bold": True, "foregroundColor": WHITE, "fontSize": 11}}})
+
+    try:
+        ws.batch_format(fmt_requests)
+    except AttributeError:
+        # gspread viejo sin batch_format — aplica una por una (más lento pero funciona)
+        for f in fmt_requests:
+            ws.format(f["range"], f["format"])
+
+    if groups:
+        sheet_id = ws.id
+        requests = [
+            {"addDimensionGroup": {"range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": start - 1, "endIndex": end}}}
+            for start, end in groups
+        ]
+        sheet.batch_update({"requests": requests})
 
 
 # ================= CLASIFICACIÓN DE ESTADOS DE CUENTA =================
@@ -630,7 +719,10 @@ async def check_6month_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     ensure_worksheets_exist()
-    ensure_ppto_mensual()
+    try:
+        ensure_ppto_mensual()
+    except Exception as e:
+        log.warning(f"No se pudo crear/verificar PPTO Mensual — el bot sigue funcionando normal: {e}")
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
